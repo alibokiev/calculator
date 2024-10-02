@@ -25,6 +25,40 @@ curl_setopt_array($curl, [
     CURLOPT_HTTPHEADER => [
         'Authorization: ' . $bearerToken,
     ],
+    CURLOPT_WRITEFUNCTION => function($ch, $chunk) {
+        static $totalSize = 0;
+        static $currentIndex = 0;
+        static $awaitElementNumber = null;
+        static $creditDays = null;
+        static $creditPercent = null;
+
+        // Получаем заголовки один раз
+        if (is_null($awaitElementNumber)) {
+            $info = curl_getinfo($ch);
+            $awaitElementNumber = intval($info['Await-Element-Number']);
+            $creditDays = intval($info['Await-Credit-Days']);
+            $creditPercent = floatval($info['Await-Credit-Percent-Per-Day']);
+        }
+
+        // Обрабатываем кусок данных (например, строку JSON)
+        $totalSize += strlen($chunk);
+
+        // Разбираем JSON по частям и ищем нужный элемент
+        $data = json_decode($chunk, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            foreach ($data as $user) {
+                $currentIndex++;
+                if ($currentIndex === $awaitElementNumber) {
+                    // Нашли нужный элемент, можем остановиться
+                    processUser($user, $creditDays, $creditPercent);
+                    return -1; // Остановить загрузку, так как элемент найден
+                }
+            }
+        }
+
+        // Если не нашли, продолжаем загрузку
+        return strlen($chunk);
+    }
 ]);
 
 // решение только для текущей задачи, так как сервер не доверенный
@@ -41,59 +75,50 @@ if ($httpCode !== 200) {
     exit(1);
 }
 
-$headers = curl_getinfo($curl, CURLINFO_HEADER_OUT);
 curl_close($curl);
 
-// Получаем заголовки
-$creditDays = intval($headers['Await-Credit-Days']);
-$creditPercent = floatval($headers['Await-Credit-Percent-Per-Day']);
-$elementNumber = intval($headers['Await-Element-Number']);
+function processUser($user, $creditDays, $creditPercent): void
+{
+    global $postUrl, $bearerToken;
 
-// Декодируем JSON ответ
-$data = json_decode($response, true);
+    $email = $user['email'];
+    $ip = $user['ip'];
+    $firstName = $user['firstName'];
+    $lastName = $user['lastName'];
 
-if (is_null($data)) {
-    echo 'Incorrect data!';
-    exit(1);
+    // Рассчитываем сумму кредита
+    $principal = 1;
+    $totalCredit = $principal * pow((1 + $creditPercent / 100), $creditDays);
+    $totalCredit = round($totalCredit, 2);
+
+    // Формируем данные для POST запроса
+    $postData = json_encode([
+        "email" => $email,
+        "ip" => $ip,
+        "firstName" => $firstName,
+        "lastName" => $lastName,
+        "credit" => [
+            "total" => $totalCredit
+        ]
+    ]);
+
+    // Инициализируем cURL для POST запроса
+    $ch = curl_init($postUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $bearerToken
+    ]);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
+
+    // Выполняем POST запрос
+    $postResponse = curl_exec($ch);
+    if ($postResponse === false) {
+        echo 'Ошибка POST запроса: ' . curl_error($ch);
+    } else {
+        echo 'Ответ POST: ' . $postResponse;
+    }
+
+    curl_close($ch);
 }
-
-// Извлекаем данные из нужного элемента
-$userData = $data[$elementNumber - 1];
-$email = $userData['email'];
-$ip = $userData['ip'];
-$firstName = $userData['firstName'];
-$lastName = $userData['lastName'];
-
-// Рассчитываем сумму кредита
-$principal = 1;
-$totalCredit = $principal * pow((1 + $creditPercent / 100), $creditDays);
-$totalCredit = round($totalCredit, 2);
-
-// Формируем данные для POST запроса
-$postData = json_encode([
-    "email" => $email,
-    "ip" => $ip,
-    "firstName" => $firstName,
-    "lastName" => $lastName,
-    "credit" => [
-        "total" => $totalCredit
-    ]
-]);
-
-// Инициализируем cURL для POST запроса
-$ch = curl_init($postUrl);
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_POST, true);
-curl_setopt($ch, CURLOPT_HTTPHEADER, [
-    'Content-Type: application/json',
-    'Authorization: Bearer ' . $bearerToken
-]);
-curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
-
-// Выполняем POST запрос
-$response = curl_exec($ch);
-curl_close($ch);
-
-// Выводим результат
-echo $response;
-
