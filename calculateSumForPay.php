@@ -6,7 +6,7 @@ error_reporting(E_ALL);
 // Устанавливаем URL и токен
 $getUrl = "https://php-test.dev.kviku.space/api/v1/task";
 $postUrl = "https://php-test.dev.kviku.space/api/v1/task";
-$bearerToken = "bearer-token";
+$bearerToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImJva2lldmFsaW5hemlyaUBnbWFpbC5jb20iLCJleHAiOjE3Mjg0NzY2ODAsImZpcnN0TmFtZSI6IkFsaSIsImxhc3ROYW1lIjoiQm9raWV2In0.5nck_CKk98bkod7A0oULDsgFGJjoiePhOxHMMLtFWmk";
 
 // Инициализируем cURL для GET запроса
 $curl = curl_init();
@@ -25,41 +25,46 @@ curl_setopt_array($curl, [
     CURLOPT_HTTPHEADER => [
         'Authorization: ' . $bearerToken,
     ],
-    CURLOPT_WRITEFUNCTION => function($ch, $chunk) {
-        static $totalSize = 0;
-        static $currentIndex = 0;
-        static $awaitElementNumber = null;
-        static $creditDays = null;
-        static $creditPercent = null;
+]);
 
-        // Получаем заголовки один раз
-        if (is_null($awaitElementNumber)) {
-            $info = curl_getinfo($ch);
-            $awaitElementNumber = intval($info['Await-Element-Number']);
-            $creditDays = intval($info['Await-Credit-Days']);
-            $creditPercent = floatval($info['Await-Credit-Percent-Per-Day']);
-        }
+$buffer = ''; // Буфер для накопления данных
 
-        // Обрабатываем кусок данных (например, строку JSON)
-        $totalSize += strlen($chunk);
+curl_setopt($curl, CURLOPT_WRITEFUNCTION, function($ch, $chunk) use (&$buffer) {
+    $buffer .= $chunk; // Накопление данных
+    static $totalSize = 0;
+    static $currentIndex = 0;
+    static $awaitElementNumber = null;
+    static $creditDays = null;
+    static $creditPercent = null;
 
-        // Разбираем JSON по частям и ищем нужный элемент
-        $data = json_decode($chunk, true);
-        if (json_last_error() === JSON_ERROR_NONE) {
-            foreach ($data as $user) {
-                $currentIndex++;
-                if ($currentIndex === $awaitElementNumber) {
-                    // Нашли нужный элемент, можем остановиться
-                    processUser($user, $creditDays, $creditPercent);
-                    return -1; // Остановить загрузку, так как элемент найден
-                }
+    // Получаем заголовки один раз
+    if (is_null($awaitElementNumber)) {
+        $info = curl_getinfo($ch);
+        $awaitElementNumber = intval($info['Await-Element-Number']);
+        $creditDays = intval($info['Await-Credit-Days']);
+        $creditPercent = floatval($info['Await-Credit-Percent-Per-Day']);
+    }
+
+    // Обрабатываем кусок данных (например, строку JSON)
+    $totalSize += strlen($chunk);
+
+    // Разбираем JSON по частям и ищем нужный элемент
+    $data = json_decode($buffer, true);
+    if (json_last_error() === JSON_ERROR_NONE) {
+        foreach ($data as $user) {
+            $currentIndex++;
+            if ($currentIndex === $awaitElementNumber) {
+                // Нашли нужный элемент, можем остановиться
+                processUser($user, $creditDays, $creditPercent);
+                return -1; // Остановить загрузку, так как элемент найден
             }
         }
-
-        // Если не нашли, продолжаем загрузку
-        return strlen($chunk);
+        $buffer = ''; // Сбрасываем буфер
     }
-]);
+
+    // Если не нашли, продолжаем загрузку
+    return strlen($chunk);
+});
 
 // решение только для текущей задачи, так как сервер не доверенный
 curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
